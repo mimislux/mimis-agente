@@ -14,5 +14,9 @@
     "bindings": [{ "name": "AGENTE", "class_name": "Agente" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Agente"] }],
+  "secrets_store_secrets": [
+    { "binding": "MELI_TOKEN", "store_id": "9bed706d3f9740158c3974471de823b1", "secret_name": "MELI_ACCESS_TOKEN" },
+    { "binding": "MELI_TOKEN_TEST", "store_id": "9bed706d3f9740158c3974471de823b1", "secret_name": "MELI_ACCESS_TOKEN_SANDBOX" }
+  ],
   "observability": { "enabled": true }
 }

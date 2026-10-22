@@ -33,7 +33,7 @@ const json = (o, status = 200) =>
 
 // Rutas de diagnóstico y datos: SOLO con el token de admin (nunca públicas).
 // Un endpoint abierto que devuelve conversaciones es una puerta para cualquiera.
-const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado"];
+const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami"];
 
 // Números de negocio propios (forma canónica). Un número de negocio NUNCA le responde
 // a otro número de negocio: si no, los dos agentes se contestan en bucle infinito.
@@ -238,6 +238,25 @@ export default {
     if (url.pathname === "/threads/estado") {
       const g = env.MIMIS_EVENTS ? await env.MIMIS_EVENTS.get("threads:token") : null;
       return json({ hay_token: !!g });
+    }
+
+    // Mercado Pago / Mercado Libre — PUERTA DE SERVICIO.
+    // El token vive en el Secrets Store de Cloudflare (write-only): el Worker lo lee con
+    // el binding y hace la llamada. Yo nunca veo la clave — sólo pido por esta puerta.
+    if (url.pathname === "/mp/whoami") {
+      const cual = url.searchParams.get("env") === "test" ? "MELI_TOKEN_TEST" : "MELI_TOKEN";
+      const b = env[cual];
+      if (!b) return json({ error: "sin binding " + cual }, 500);
+      try {
+        const token = await b.get();
+        const r = await fetch("https://api.mercadolibre.com/users/me",
+          { headers: { Authorization: "Bearer " + token } });
+        const d = await r.json();
+        return json({ ok: r.ok, status: r.status, id: d.id, nickname: d.nickname,
+                      country: d.country_id, site: d.site_id, error: d.message || null });
+      } catch (e) {
+        return json({ error: String(e).slice(0, 150) }, 500);
+      }
     }
 
     // Mercado Libre: redirect URI del OAuth (GET) y notificaciones (POST), sobre el mismo Worker.
