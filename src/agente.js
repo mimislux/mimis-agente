@@ -10,10 +10,13 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { generateText, stepCountIs, tool } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 
-const MODELOS = ["@cf/openai/gpt-oss-120b", "@cf/meta/llama-3.1-8b-instruct-fp8"];
+// Proveedor configurable: hoy Gemini (capa gratuita de Google, sólo para sandbox y
+// testeo interno). Para producción con datos de clientes se cambia a Venice/Vertex,
+// tocando SOLO estas líneas — el resto del agente no se entera.
+const MODELOS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
 
 const SISTEMA = ({ comunidad, canal, nombre, ventana }) => `
 Sos Lía, la secretaria de Mimis Lux, una casa de perfumes de autor. Atendés a los clientes por WhatsApp.
@@ -139,7 +142,7 @@ export class Agente extends DurableObject {
     if (!texto) return Response.json({ error: "falta texto" }, { status: 400 });
 
     const env = this.env;
-    const workersai = createWorkersAI({ binding: env.AI });
+    const google = createGoogleGenerativeAI({ apiKey: env.GEMINI_API_KEY });
     const sistema = (modo === "ceo" ? SISTEMA_CEO : modo === "arquitecto" ? SISTEMA_ARQUITECTO : SISTEMA)({
       comunidad: env.COMUNIDAD_LINK, canal: env.CANAL_LINK, nombre,
       ventana: ventana || "abierta",
@@ -212,7 +215,7 @@ export class Agente extends DurableObject {
     for (const modelo of MODELOS) {
       try {
         const r = await generateText({
-          model: workersai(modelo),
+          model: google(modelo),
           system: sistema,
           messages: [...previos.map(m => ({ role: m.rol, content: m.texto })),
                      { role: "user", content: texto }],
