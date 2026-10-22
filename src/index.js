@@ -33,7 +33,7 @@ const json = (o, status = 200) =>
 
 // Rutas de diagnóstico y datos: SOLO con el token de admin (nunca públicas).
 // Un endpoint abierto que devuelve conversaciones es una puerta para cualquiera.
-const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami", "/mp/payments"];
+const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami", "/mp/payments", "/mp/token"];
 
 // Números de negocio propios (forma canónica). Un número de negocio NUNCA le responde
 // a otro número de negocio: si no, los dos agentes se contestan en bucle infinito.
@@ -254,6 +254,20 @@ export default {
         const d = await r.json();
         return json({ ok: r.ok, status: r.status, id: d.id, nickname: d.nickname,
                       country: d.country_id, site: d.site_id, error: d.message || null });
+      } catch (e) {
+        return json({ error: String(e).slice(0, 150) }, 500);
+      }
+    }
+    if (url.pathname === "/mp/token") {
+      // Entrega el access token para el CLI local (mpcli). Protegido con X-Admin-Token:
+      // es la MISMA frontera de confianza que /conversaciones. El token va a un archivo
+      // local (600) para que mpcli corra sin que la clave pase por el chat.
+      const cual = url.searchParams.get("env") === "test" ? "MELI_TOKEN_TEST" : "MELI_TOKEN";
+      const b = env[cual];
+      if (!b) return json({ error: "sin binding " + cual }, 500);
+      try {
+        const token = await b.get();
+        return new Response(token, { status: 200 });
       } catch (e) {
         return json({ error: String(e).slice(0, 150) }, 500);
       }
