@@ -33,7 +33,7 @@ const json = (o, status = 200) =>
 
 // Rutas de diagnóstico y datos: SOLO con el token de admin (nunca públicas).
 // Un endpoint abierto que devuelve conversaciones es una puerta para cualquiera.
-const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami"];
+const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami", "/mp/payments"];
 
 // Números de negocio propios (forma canónica). Un número de negocio NUNCA le responde
 // a otro número de negocio: si no, los dos agentes se contestan en bucle infinito.
@@ -254,6 +254,23 @@ export default {
         const d = await r.json();
         return json({ ok: r.ok, status: r.status, id: d.id, nickname: d.nickname,
                       country: d.country_id, site: d.site_id, error: d.message || null });
+      } catch (e) {
+        return json({ error: String(e).slice(0, 150) }, 500);
+      }
+    }
+    if (url.pathname === "/mp/payments") {
+      // Lectura de cobros (Mercado Pago): la conciliación. Devuelve el total y cuántos
+      // trae, nunca los datos sensibles del comprador en bruto — se resume acá.
+      const b = env.MELI_TOKEN;
+      if (!b) return json({ error: "sin binding MELI_TOKEN" }, 500);
+      try {
+        const token = await b.get();
+        const r = await fetch("https://api.mercadopago.com/v1/payments/search?limit=5&sort=date_created&criteria=desc",
+          { headers: { Authorization: "Bearer " + token } });
+        const d = await r.json();
+        return json({ ok: r.ok, status: r.status, total: d.paging?.total ?? null,
+                      traidos: (d.results || []).length,
+                      error: d.error || d.message || d.cause?.map(c => c.code).join(",") || null });
       } catch (e) {
         return json({ error: String(e).slice(0, 150) }, 500);
       }
