@@ -119,6 +119,13 @@ async function atenderWhatsApp(entry, env) {
       const texto = m.text?.body || m.interactive?.button_reply?.title || m.button?.text || "";
       if (!de || !texto) continue;
 
+      // ORIGEN del mensaje: si viene de un anuncio "clic para chatear", Meta lo manda
+      // en m.referral. Eso abre la ventana FEP (72 h a 7 días gratis) y dice QUÉ le interesa.
+      const ref = m.referral;
+      const origen = ref
+        ? `anuncio (${ref.source_type || "ad"}): ${ref.headline || ref.body || ref.source_url || "sin detalle"}`
+        : "orgánico";
+
       // Meta reintenta el webhook si tarda: sin dedup, la persona recibe la respuesta dos veces.
       if (env.MIMIS_EVENTS) {
         if (await env.MIMIS_EVENTS.get(`wa:visto:${wamid}`)) {
@@ -138,7 +145,7 @@ async function atenderWhatsApp(entry, env) {
         const r = await stub.fetch("https://agente/", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ texto, de: clave, nombre, ventana: "abierta", modo }),
+          body: JSON.stringify({ texto, de: clave, nombre, ventana: "abierta", modo, origen }),
         });
         const d = await r.json();
         respuesta = d.respuesta;
@@ -231,6 +238,27 @@ export default {
     if (url.pathname === "/threads/estado") {
       const g = env.MIMIS_EVENTS ? await env.MIMIS_EVENTS.get("threads:token") : null;
       return json({ hay_token: !!g });
+    }
+
+    // Mercado Libre: redirect URI del OAuth (GET) y notificaciones (POST), sobre el mismo Worker.
+    // El callback recibe ?code=... cuando un vendedor autoriza la app; acá se guarda para
+    // canjearlo por el access_token. Las notificaciones son webhooks de órdenes/pagos.
+    if (url.pathname === "/ml/callback") {
+      const code = url.searchParams.get("code") || null;
+      if (code && env.MIMIS_EVENTS) {
+        await env.MIMIS_EVENTS.put("ml:oauth:code", JSON.stringify({
+          code, cuando: new Date().toISOString(),
+        }), { expirationTtl: 600 });
+      }
+      return json({ ok: true, code: code ? "recibido" : "sin code" });
+    }
+    if (url.pathname === "/ml/notificaciones") {
+      if (request.method === "POST" && env.MIMIS_EVENTS) {
+        const cuerpo = await request.text().catch(() => "");
+        await env.MIMIS_EVENTS.put("ml:notif:" + Date.now(), cuerpo.slice(0, 4000),
+          { expirationTtl: 86400 });
+      }
+      return json({ ok: true });
     }
 
     if (request.method === "GET") {

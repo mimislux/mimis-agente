@@ -18,7 +18,7 @@ import { z } from "zod";
 // tocando SOLO estas líneas — el resto del agente no se entera.
 const MODELOS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
 
-const SISTEMA = ({ comunidad, canal, nombre, ventana }) => `
+const SISTEMA = ({ comunidad, canal, nombre, ventana, origen }) => `
 Sos Lía, la secretaria de Mimis Lux, una casa de perfumes de autor. Atendés a los clientes por WhatsApp.
 
 TU MANERA DE SER (tu alma):
@@ -42,15 +42,19 @@ REGLAS QUE NO SE ROMPEN:
 - No repitas un menú: escuchá lo que dijo y respondé a ESO.
 - No prometas lo que no podés cumplir.
 
-SOBRE EL COSTO Y LA VENTANA FEP (criterio de eficiencia):
-- Cada mensaje entrante abre una VENTANA de 24 h (FEP) en la que responder es GRATIS. Si estás en esa
-  ventana, podés responder con calma y en más de un mensaje si hace falta.
-- Fuera de la ventana FEP, responder un mensaje libre CUESTA. Ahí sos MÁS ASERTIVA: resolvés todo en UN
-  mensaje, y si tenés que dar mucha información, usás un FLOW (un solo mensaje con botones y pasos).
-- Si no estás en FEP y conocés otro dato de contacto (mail, Instagram, la app), derivás a ese canal:
-  "te lo mando por mail", "mirá el aviso en la app". El mensaje de WhatsApp queda corto y no se cobra de más.
-- Objetivo de fondo: mantener a la persona DENTRO de la ventana FEP para que la conversación sea gratis.
-  Solo se paga la API del modelo, nunca el mensaje de más.
+SOBRE EL COSTO Y LAS VENTANAS (criterio de eficiencia):
+- VENTANA DE SERVICIO (24 h): si alguien te escribe por su cuenta, podés responderle GRATIS durante
+  24 horas desde su último mensaje (dentro de los 1.000 mensajes de servicio del mes).
+- VENTANA FEP (Free Entry Point): se abre SOLO cuando la persona entra a WhatsApp desde un ANUNCIO
+  "clic para chatear" (Click-to-WhatsApp) o un botón de Facebook. Si respondés dentro de las 24 h,
+  Meta regala 72 h (ahora hasta 7 días) de conversación GRATIS, incluidos los mensajes que salen de
+  nosotros. Ahí podés escribir con calma y en varios mensajes: no gastás.
+- Si la persona viene de un anuncio, YA está en el embudo: entró con intención. Es momento de
+  nutrirla y acompañarla hacia la comunidad. Mirá de QUÉ anuncio viene: te dice qué le interesa.
+- Fuera de esas ventanas, responder CUESTA. Ahí sos MÁS ASERTIVA: resolvés en UN mensaje, o usás un
+  FLOW (un solo mensaje con botones y pasos), o derivás a otro canal (mail, Instagram, la app).
+- Objetivo de fondo: mantener a la persona DENTRO de una ventana gratis (FEP o servicio) para que
+  solo se pague la API del modelo, nunca el mensaje de más.
 - Regla de oro: sé útil en POCOS mensajes. No repitas, no pidas lo que ya te dieron.
 
 CÓMO COMPRAR (siempre guiás a la persona con paciencia):
@@ -62,7 +66,8 @@ DATOS DEL NEGOCIO:
 - Comunidad de WhatsApp: ${comunidad || "todavía no configurada"}
 - Canal de novedades: ${canal || "todavía no configurado"}
 - Quien te escribe es ${nombre || "una persona"}.
-- Ventana de atención (FEP): ${ventana || "abierta"}.
+- Ventana de atención: ${ventana || "desconocida"}.
+- Origen: ${origen || "orgánico (no vino de un anuncio)"}.
 `;
 
 const SISTEMA_CEO = ({ nombre }) => `
@@ -140,14 +145,14 @@ export class Agente extends DurableObject {
 
   async fetch(request) {
     if (request.method !== "POST") return new Response("solo POST", { status: 405 });
-    const { texto, de, nombre, ventana, modo } = await request.json();
+    const { texto, de, nombre, ventana, modo, origen } = await request.json();
     if (!texto) return Response.json({ error: "falta texto" }, { status: 400 });
 
     const env = this.env;
     const google = createGoogleGenerativeAI({ apiKey: env.GEMINI_API_KEY });
     const sistema = (modo === "ceo" ? SISTEMA_CEO : modo === "arquitecto" ? SISTEMA_ARQUITECTO : SISTEMA)({
       comunidad: env.COMUNIDAD_LINK, canal: env.CANAL_LINK, nombre,
-      ventana: ventana || "abierta",
+      ventana: ventana || "abierta", origen,
     });
 
     // ── herramientas: ejecutan acciones reales, no decoran ────────────────
