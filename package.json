@@ -1,0 +1,20 @@
+{
+  "name": "mimis-agente",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "agents": "^0.29.0",
+    "ai": "^7.0.148",
+    "workers-ai-provider": "^4.0.1",
+    "zod": "^4.6.7"
+  }
+}

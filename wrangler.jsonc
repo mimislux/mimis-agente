@@ -1,0 +1,18 @@
+{
+  "name": "mimis-webhooks",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "wa.mimislux.com/*", "zone_name": "mimislux.com" }],
+  "ai": { "binding": "AI" },
+  "kv_namespaces": [
+    { "binding": "MIMIS_EVENTS", "id": "1933fd05a1514d72ba5b04c32238165b" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "AGENTE", "class_name": "Agente" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Agente"] }],
+  "observability": { "enabled": true }
+}
