@@ -116,6 +116,7 @@ async function atenderWhatsApp(entry, env) {
       //   · real   = SIEMPRE la secretaria (clientes), lo mande quien lo mande
       const modo = esTest ? (QUIEN_ES[clave] || "publico") : "publico";
       const wamid = m.id;
+      const nombre = v.contacts?.[0]?.profile?.name || null;
       let texto = m.text?.body || m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || m.button?.text || "";
       let pedido = null;
       if (m.type === "order" && m.order) {
@@ -148,10 +149,14 @@ async function atenderWhatsApp(entry, env) {
 
       // Si el mensaje es un pedido del catálogo (m.type === "order"), generamos el link de
       // Mercado Pago automáticamente y lo guardamos en KV para seguimiento.
+      // El entorno (produccion/sandbox) se lee de la clave KV "mp:modo" para poder testear
+      // con el token de prueba sin tocar el código.
       let linkPago = null;
-      if (pedido && env.MELI_TOKEN) {
+      const mpModo = (env.MIMIS_EVENTS ? await env.MIMIS_EVENTS.get("mp:modo") : null) || "produccion";
+      const mpBinding = mpModo === "sandbox" ? env.MELI_TOKEN_TEST : env.MELI_TOKEN;
+      if (pedido && mpBinding) {
         try {
-          const mpTok = await env.MELI_TOKEN.get();
+          const mpTok = await mpBinding.get();
           const prefBody = {
             items: pedido.items.map(it => ({
               id: it.product_retailer_id,
@@ -176,7 +181,8 @@ async function atenderWhatsApp(entry, env) {
           });
           const dPref = await rPref.json();
           if (rPref.ok && dPref.init_point) {
-            linkPago = dPref.init_point;
+            // En sandbox el checkout se abre en sandbox.mercadopago.com.ar, no en el de producción.
+            linkPago = mpModo === "sandbox" ? (dPref.sandbox_init_point || dPref.init_point) : dPref.init_point;
             texto += ` [LINK_DE_PAGO_GENERADO: ${linkPago}]`;
           }
           if (env.MIMIS_EVENTS) {
@@ -189,7 +195,6 @@ async function atenderWhatsApp(entry, env) {
       }
 
       // Un Durable Object por persona + modo: la memoria del CEO no se mezcla con la de un cliente.
-      const nombre = v.contacts?.[0]?.profile?.name || null;
       const id = env.AGENTE.idFromName(clave + ":" + modo);
       const stub = env.AGENTE.get(id);
 
@@ -365,12 +370,22 @@ export default {
         try {
           const notif = JSON.parse(cuerpo || "{}");
           const payId = notif?.data?.id || (notif.topic === "payment" && notif.resource ? String(notif.resource).split("/").pop() : null);
-          if (payId && env.MELI_TOKEN && env.WHATSAPP_TOKEN) {
-            const mpTok = await env.MELI_TOKEN.get();
-            const rPay = await fetch(`https://api.mercadopago.com/v1/payments/${payId}`, {
-              headers: { Authorization: "Bearer " + mpTok },
-            });
-            const dPay = await rPay.json();
+          if (payId && env.WHATSAPP_TOKEN) {
+            // El pago puede venir del sandbox o de producción: probamos los DOS tokens
+            // hasta que uno lo lea. Así la confirmación funciona en ambos entornos.
+            let dPay = null;
+            let rPay = null;
+            for (const b of [env.MELI_TOKEN, env.MELI_TOKEN_TEST]) {
+              if (!b) continue;
+              try {
+                const t = await b.get();
+                const rr = await fetch(`https://api.mercadopago.com/v1/payments/${payId}`, {
+                  headers: { Authorization: "Bearer " + t },
+                });
+                if (rr.ok) { rPay = rr; dPay = await rr.json(); break; }
+              } catch (e) { /* probar el otro token */ }
+            }
+            if (!dPay) return json({ ok: true, aviso: "pago no leído con ningún token" });
             const ref = dPay.external_reference || "";
             if (rPay.ok && dPay.status === "approved" && ref.startsWith("wa:")) {
               const partes = ref.split(":");
