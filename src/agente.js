@@ -58,8 +58,9 @@ SOBRE EL COSTO Y LAS VENTANAS (criterio de eficiencia):
 - Regla de oro: sé útil en POCOS mensajes. No repitas, no pidas lo que ya te dieron.
 
 CÓMO COMPRAR (siempre guiás a la persona con paciencia):
-- Todo se hace dentro de WhatsApp: se elige del catálogo y se paga por WhatsApp (billetera o link).
-- Paso a paso: mirá el catálogo → elegí tu perfume → te paso el link de pago → coordinamos el envío.
+- Todo se hace dentro de WhatsApp: podés mandarle la vidriera interactiva usando la herramienta \`enviar_catalogo\`.
+- Cuando la persona elige del catálogo y envía su carrito, el sistema genera automáticamente un \`[LINK_DE_PAGO_GENERADO: ...]\` de Mercado Pago (con retorno automático a WhatsApp al pagar). Si ves ese link en el mensaje, pasáselo tal cual con calidez para que abone y regrese al chat.
+- Paso a paso: mirá el catálogo → agregá tus perfumes al carrito → te paso el link de pago → cuando se acredita te avisamos por acá mismo y coordinamos el envío.
 - Si la persona ya está logueada con Google y verificada (vía Whop), tiene mejores condiciones: lo mencionás naturalmente.
 
 DATOS DEL NEGOCIO:
@@ -145,7 +146,7 @@ export class Agente extends DurableObject {
 
   async fetch(request) {
     if (request.method !== "POST") return new Response("solo POST", { status: 405 });
-    const { texto, de, nombre, ventana, modo, origen } = await request.json();
+    const { texto, de, nombre, ventana, modo, origen, pnid } = await request.json();
     if (!texto) return Response.json({ error: "falta texto" }, { status: 400 });
 
     const env = this.env;
@@ -206,6 +207,45 @@ export class Agente extends DurableObject {
               { expirationTtl: 2592000 });
           }
           return { guardado: true };
+        },
+      }),
+      enviar_catalogo: tool({
+        description: "Envía la vidriera interactiva del catálogo de WhatsApp con los 5 perfumes de Mimis Lux (A1=$35.000, B2=$36.000, C3=$37.000, D4=$38.000, E5=$39.000) para que la persona pueda verlos y armar su carrito dentro de WhatsApp.",
+        inputSchema: z.object({
+          mensaje: z.string().optional().describe("Texto cálido para acompañar la vidriera"),
+        }),
+        execute: async ({ mensaje }) => {
+          const phoneId = pnid || "1305193802687055";
+          if (!env.WHATSAPP_TOKEN) return { enviado: false, error: "sin WHATSAPP_TOKEN" };
+          const r = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/messages`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messaging_product: "whatsapp",
+              to: de,
+              type: "interactive",
+              interactive: {
+                type: "product_list",
+                header: { type: "text", text: "Colección Mimis Lux ✨" },
+                body: { text: mensaje || "Acá tenés nuestra colección de fragancias de autor. Podés tocar cada una para verla y agregarla a tu pedido:" },
+                footer: { text: "Mimis Lux · Fragancias de autor" },
+                action: {
+                  catalog_id: "1084486154431807",
+                  sections: [{
+                    title: "Perfumes disponibles",
+                    product_items: [
+                      { product_retailer_id: "A1" },
+                      { product_retailer_id: "B2" },
+                      { product_retailer_id: "C3" },
+                      { product_retailer_id: "D4" },
+                      { product_retailer_id: "E5" },
+                    ],
+                  }],
+                },
+              },
+            }),
+          });
+          return { enviado: r.ok, status: r.status };
         },
       }),
     };

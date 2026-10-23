@@ -116,7 +116,18 @@ async function atenderWhatsApp(entry, env) {
       //   · real   = SIEMPRE la secretaria (clientes), lo mande quien lo mande
       const modo = esTest ? (QUIEN_ES[clave] || "publico") : "publico";
       const wamid = m.id;
-      const texto = m.text?.body || m.interactive?.button_reply?.title || m.button?.text || "";
+      let texto = m.text?.body || m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || m.button?.text || "";
+      let pedido = null;
+      if (m.type === "order" && m.order) {
+        const items = m.order.product_items || [];
+        const detalle = items.map(it => `${it.quantity || 1}x ${it.product_retailer_id} ($${it.item_price} ${it.currency})`).join(", ");
+        const total = items.reduce((acc, it) => acc + (Number(it.item_price || 0) * Number(it.quantity || 1)), 0);
+        const moneda = items[0]?.currency || "ARS";
+        pedido = { catalog_id: m.order.catalog_id, items, total, moneda, text: m.order.text || null };
+        texto = `[PEDIDO DE CATÁLOGO: ${detalle} | Total: $${total} ${moneda}${m.order.text ? ` | Nota: ${m.order.text}` : ""}]`;
+      } else if (m.interactive?.type === "nfm_reply" && m.interactive?.nfm_reply) {
+        texto = `[FLOW COMPLETADO: ${m.interactive.nfm_reply.response_json || m.interactive.nfm_reply.body || ""}]`;
+      }
       if (!de || !texto) continue;
 
       // ORIGEN del mensaje: si viene de un anuncio "clic para chatear", Meta lo manda
@@ -135,6 +146,48 @@ async function atenderWhatsApp(entry, env) {
         await env.MIMIS_EVENTS.put(`wa:visto:${wamid}`, "1", { expirationTtl: 86400 });
       }
 
+      // Si el mensaje es un pedido del catálogo (m.type === "order"), generamos el link de
+      // Mercado Pago automáticamente y lo guardamos en KV para seguimiento.
+      let linkPago = null;
+      if (pedido && env.MELI_TOKEN) {
+        try {
+          const mpTok = await env.MELI_TOKEN.get();
+          const prefBody = {
+            items: pedido.items.map(it => ({
+              id: it.product_retailer_id,
+              title: `Mimis Lux · Perfume (${it.product_retailer_id})`,
+              quantity: Number(it.quantity || 1),
+              unit_price: Number(it.item_price || 35000),
+              currency_id: "ARS",
+            })),
+            external_reference: `wa:${clave}:${wamid}`,
+            back_urls: {
+              success: "https://wa.me/5491165870271?text=Ya%20hice%20el%20pago%20de%20mi%20pedido%20%E2%9C%A8",
+              pending: "https://wa.me/5491165870271?text=Mi%20pago%20qued%C3%B3%20pendiente",
+              failure: "https://wa.me/5491165870271?text=Tuve%20un%20problema%20con%20el%20pago",
+            },
+            auto_return: "approved",
+            notification_url: "https://wa.mimislux.com/ml/notificaciones",
+          };
+          const rPref = await fetch("https://api.mercadopago.com/checkout/preferences", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + mpTok, "Content-Type": "application/json" },
+            body: JSON.stringify(prefBody),
+          });
+          const dPref = await rPref.json();
+          if (rPref.ok && dPref.init_point) {
+            linkPago = dPref.init_point;
+            texto += ` [LINK_DE_PAGO_GENERADO: ${linkPago}]`;
+          }
+          if (env.MIMIS_EVENTS) {
+            await env.MIMIS_EVENTS.put(`wa:order:${wamid}`, JSON.stringify({
+              de: clave, from_raw: de, nombre, pedido, link_pago: linkPago,
+              preference_id: dPref.id || null, cuando: new Date().toISOString(),
+            }), { expirationTtl: 2592000 });
+          }
+        } catch (e) { /* continúa al agente aunque falle MP */ }
+      }
+
       // Un Durable Object por persona + modo: la memoria del CEO no se mezcla con la de un cliente.
       const nombre = v.contacts?.[0]?.profile?.name || null;
       const id = env.AGENTE.idFromName(clave + ":" + modo);
@@ -145,7 +198,7 @@ async function atenderWhatsApp(entry, env) {
         const r = await stub.fetch("https://agente/", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ texto, de: clave, nombre, ventana: "abierta", modo, origen }),
+          body: JSON.stringify({ texto, de: clave, nombre, ventana: "abierta", modo, origen, pnid }),
         });
         const d = await r.json();
         respuesta = d.respuesta;
@@ -303,10 +356,39 @@ export default {
       return json({ ok: true, code: code ? "recibido" : "sin code" });
     }
     if (url.pathname === "/ml/notificaciones") {
-      if (request.method === "POST" && env.MIMIS_EVENTS) {
+      if (request.method === "POST") {
         const cuerpo = await request.text().catch(() => "");
-        await env.MIMIS_EVENTS.put("ml:notif:" + Date.now(), cuerpo.slice(0, 4000),
-          { expirationTtl: 86400 });
+        if (env.MIMIS_EVENTS) {
+          await env.MIMIS_EVENTS.put("ml:notif:" + Date.now(), cuerpo.slice(0, 4000),
+            { expirationTtl: 86400 });
+        }
+        try {
+          const notif = JSON.parse(cuerpo || "{}");
+          const payId = notif?.data?.id || (notif.topic === "payment" && notif.resource ? String(notif.resource).split("/").pop() : null);
+          if (payId && env.MELI_TOKEN && env.WHATSAPP_TOKEN) {
+            const mpTok = await env.MELI_TOKEN.get();
+            const rPay = await fetch(`https://api.mercadopago.com/v1/payments/${payId}`, {
+              headers: { Authorization: "Bearer " + mpTok },
+            });
+            const dPay = await rPay.json();
+            const ref = dPay.external_reference || "";
+            if (rPay.ok && dPay.status === "approved" && ref.startsWith("wa:")) {
+              const partes = ref.split(":");
+              const waDestino = partes[1];
+              const dedupKey = `mp:pagado:${payId}`;
+              const yaAvisado = env.MIMIS_EVENTS ? await env.MIMIS_EVENTS.get(dedupKey) : null;
+              if (!yaAvisado && waDestino) {
+                if (env.MIMIS_EVENTS) await env.MIMIS_EVENTS.put(dedupKey, "1", { expirationTtl: 604800 });
+                await enviarWhatsApp(
+                  env,
+                  waDestino,
+                  `✅ ¡Pago acreditado! ($${dPay.transaction_amount} ${dPay.currency_id || "ARS"})\n\nYa estamos preparando tu pedido de Mimis Lux ✨. Pasame por acá tu dirección y código postal así coordinamos el envío al toque. 🌸`,
+                  "1305193802687055"
+                );
+              }
+            }
+          }
+        } catch (e) { /* no bloquear el 200 a Mercado Pago */ }
       }
       return json({ ok: true });
     }
