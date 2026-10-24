@@ -28,6 +28,38 @@ function igualSeguro(a, b) {
   return d === 0;
 }
 
+// Verifica la firma de los webhooks de Whop (Standard Webhooks). El string firmado es
+// "{webhook-id}.{webhook-timestamp}.{cuerpo crudo}" con HMAC-SHA256, y el secreto es ws_<base64>.
+// La clave se deriva de tres formas (base64-decode, UTF-8, o el secreto completo): se acepta
+// la que matchee, así el verificador queda robusto sin abrir nada.
+async function verificarWhop(req, env) {
+  const id = req.headers.get("webhook-id");
+  const ts = req.headers.get("webhook-timestamp");
+  const sig = req.headers.get("webhook-signature");
+  if (!id || !ts || !sig) return { ok: false, motivo: "faltan headers" };
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return { ok: false, motivo: "fuera de ventana" };
+  const secreto = env.WHOP_WEBHOOK_SECRET;
+  if (!secreto) return { ok: false, motivo: "sin secreto" };
+  const enc = new TextEncoder();
+  const cuerpo = await req.clone().text();
+  const firmado = `${id}.${ts}.${cuerpo}`;
+  const variantes = [];
+  if (secreto.startsWith("ws_")) {
+    const base = secreto.slice(3);
+    try { variantes.push(Uint8Array.from(atob(base), c => c.charCodeAt(0))); } catch (e) {}
+    variantes.push(enc.encode(base));
+  }
+  variantes.push(enc.encode(secreto));
+  const firmas = sig.split(" ").map(s => (s.startsWith("v1,") ? s.slice(3) : s));
+  for (const clave of variantes) {
+    const key = await crypto.subtle.importKey("raw", clave, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const mac = await crypto.subtle.sign("HMAC", key, enc.encode(firmado));
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(mac)));
+    if (firmas.some(f => igualSeguro(b64, f))) return { ok: true };
+  }
+  return { ok: false, motivo: "firma inválida" };
+}
+
 const json = (o, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
 
@@ -405,6 +437,22 @@ export default {
           }
         } catch (e) { /* no bloquear el 200 a Mercado Pago */ }
       }
+      return json({ ok: true });
+    }
+
+    // Whop — PUERTA DE SERVICIO en el Worker (no en Gray Fox). Recibe los webhooks de Whop
+    // (payment.succeeded, membership.activated, …), verifica la firma y guarda el evento.
+    if (url.pathname === "/whop/webhook") {
+      if (request.method !== "POST") return json({ error: "solo POST" }, 405);
+      const v = await verificarWhop(request, env);
+      const cuerpo = await request.text().catch(() => "");
+      if (env.MIMIS_EVENTS) {
+        await env.MIMIS_EVENTS.put("whop:" + Date.now(), JSON.stringify({
+          ok: v.ok, motivo: v.motivo || null, cuerpo: cuerpo.slice(0, 2000),
+          cuando: new Date().toISOString(),
+        }), { expirationTtl: 86400 });
+      }
+      if (!v.ok) return json({ error: v.motivo }, 401);
       return json({ ok: true });
     }
 
