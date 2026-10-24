@@ -7,6 +7,7 @@
   "preview_urls": false,
   "routes": [{ "pattern": "wa.mimislux.com/*", "zone_name": "mimislux.com" }],
   "ai": { "binding": "AI" },
+  "services": [{ "binding": "PAGOS", "service": "mimis-pagos" }],
   "kv_namespaces": [
     { "binding": "MIMIS_EVENTS", "id": "1933fd05a1514d72ba5b04c32238165b" }
   ],

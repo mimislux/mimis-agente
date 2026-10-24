@@ -179,42 +179,35 @@ async function atenderWhatsApp(entry, env) {
         await env.MIMIS_EVENTS.put(`wa:visto:${wamid}`, "1", { expirationTtl: 86400 });
       }
 
-      // Si el mensaje es un pedido del catálogo (m.type === "order"), generamos el link de
-      // Mercado Pago automáticamente y lo guardamos en KV para seguimiento.
-      // El entorno (produccion/sandbox) se lee de la clave KV "mp:modo" para poder testear
-      // con el token de prueba sin tocar el código.
+      // Si el mensaje es un pedido del catálogo (m.type === "order"), le pedimos al
+      // Worker "mimis-pagos" (por service binding) que genere el link de pago.
+      // Este Worker NO toca el token de Mercado Pago: delega. El entorno se elige
+      // por la clave KV "mp:modo" (produccion/sandbox).
       let linkPago = null;
       const mpModo = (env.MIMIS_EVENTS ? await env.MIMIS_EVENTS.get("mp:modo") : null) || "produccion";
-      const mpBinding = mpModo === "sandbox" ? env.MELI_TOKEN_TEST : env.MELI_TOKEN;
-      if (pedido && mpBinding) {
+      if (pedido && env.PAGOS) {
         try {
-          const mpTok = await mpBinding.get();
-          const prefBody = {
-            items: pedido.items.map(it => ({
-              id: it.product_retailer_id,
-              title: `Mimis Lux · Perfume (${it.product_retailer_id})`,
-              quantity: Number(it.quantity || 1),
-              unit_price: Number(it.item_price || 35000),
-              currency_id: "ARS",
-            })),
-            external_reference: `wa:${clave}:${wamid}`,
-            back_urls: {
-              success: "https://wa.me/5491165870271?text=Ya%20hice%20el%20pago%20de%20mi%20pedido%20%E2%9C%A8",
-              pending: "https://wa.me/5491165870271?text=Mi%20pago%20qued%C3%B3%20pendiente",
-              failure: "https://wa.me/5491165870271?text=Tuve%20un%20problema%20con%20el%20pago",
-            },
-            auto_return: "approved",
-            notification_url: "https://wa.mimislux.com/ml/notificaciones",
-          };
-          const rPref = await fetch("https://api.mercadopago.com/checkout/preferences", {
+          const rPref = await env.PAGOS.fetch("https://pagos/preferencia", {
             method: "POST",
-            headers: { Authorization: "Bearer " + mpTok, "Content-Type": "application/json" },
-            body: JSON.stringify(prefBody),
+            headers: {
+              "content-type": "application/json",
+              "x-internal-token": env.INTERNAL_TOKEN,
+              "x-mp-modo": mpModo,
+            },
+            body: JSON.stringify({
+              items: pedido.items.map(it => ({
+                id: it.product_retailer_id,
+                title: `Mimis Lux · Perfume (${it.product_retailer_id})`,
+                quantity: Number(it.quantity || 1),
+                unit_price: Number(it.item_price || 35000),
+                currency_id: "ARS",
+              })),
+              external_reference: `wa:${clave}:${wamid}`,
+            }),
           });
           const dPref = await rPref.json();
-          if (rPref.ok && dPref.init_point) {
-            // En sandbox el checkout se abre en sandbox.mercadopago.com.ar, no en el de producción.
-            linkPago = mpModo === "sandbox" ? (dPref.sandbox_init_point || dPref.init_point) : dPref.init_point;
+          if (dPref.ok && dPref.link) {
+            linkPago = dPref.link;
             texto += ` [LINK_DE_PAGO_GENERADO: ${linkPago}]`;
           }
           if (env.MIMIS_EVENTS) {
@@ -223,7 +216,7 @@ async function atenderWhatsApp(entry, env) {
               preference_id: dPref.id || null, cuando: new Date().toISOString(),
             }), { expirationTtl: 2592000 });
           }
-        } catch (e) { /* continúa al agente aunque falle MP */ }
+        } catch (e) { /* continúa al agente aunque falle el pago */ }
       }
 
       // Un Durable Object por persona + modo: la memoria del CEO no se mezcla con la de un cliente.
