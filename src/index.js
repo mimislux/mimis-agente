@@ -65,7 +65,7 @@ const json = (o, status = 200) =>
 
 // Rutas de diagnóstico y datos: SOLO con el token de admin (nunca públicas).
 // Un endpoint abierto que devuelve conversaciones es una puerta para cualquiera.
-const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami", "/mp/payments", "/mp/token"];
+const ADMIN_PATHS = ["/salud", "/conversaciones", "/consumo", "/threads/estado", "/mp/whoami", "/mp/payments", "/mp/token", "/payloads"];
 
 // Números de negocio propios (forma canónica). Un número de negocio NUNCA le responde
 // a otro número de negocio: si no, los dos agentes se contestan en bucle infinito.
@@ -323,6 +323,21 @@ export default {
       return json({ hay_token: !!g });
     }
 
+    // /payloads: muestra el JSON CRUDO que llegó por cada webhook, para VER y entender
+    // qué información manda cada servicio (Meta, Mercado Pago, Whop). Es la "ventana"
+    // a los eventos — como ver el payload de un nodo en N8N.
+    if (url.pathname === "/payloads") {
+      if (!env.MIMIS_EVENTS) return json({ error: "sin KV" }, 500);
+      const tipo = url.searchParams.get("tipo") || "meta";
+      const prefijo = tipo === "ml" ? "ml:notif:" : tipo === "whop" ? "whop:" : "meta:raw:";
+      const l = await env.MIMIS_EVENTS.list({ prefix: prefijo, limit: 8 });
+      const out = [];
+      for (const k of l.keys) {
+        out.push({ clave: k.name, cuerpo: await env.MIMIS_EVENTS.get(k.name) });
+      }
+      return json({ tipo, total: out.length, payloads: out });
+    }
+
     // Mercado Pago / Mercado Libre — PUERTA DE SERVICIO.
     // El token vive en el Secrets Store de Cloudflare (write-only): el Worker lo lee con
     // el binding y hace la llamada. Yo nunca veo la clave — sólo pido por esta puerta.
@@ -469,6 +484,13 @@ export default {
     let payload;
     try { payload = JSON.parse(crudo); } catch { return json({ error: "json inválido" }, 400); }
     const objeto = payload.object || "desconocido";
+
+    // Guardamos el JSON CRUDO tal cual llegó, para poder VERLO y entenderlo
+    // (es el "payload" que dispara nuestra lógica, como los nodos de N8N).
+    if (env.MIMIS_EVENTS) {
+      await env.MIMIS_EVENTS.put(`meta:raw:${Date.now()}`, crudo.slice(0, 8000),
+        { expirationTtl: 86400 });
+    }
 
     let resultados = [];
     if (objeto === "whatsapp_business_account") {
