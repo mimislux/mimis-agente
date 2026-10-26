@@ -267,7 +267,7 @@ export class Agente extends DurableObject {
           messages: [...previos.map(m => ({ role: m.rol, content: m.texto })),
                      { role: "user", content: texto }],
           tools: herramientas,
-          maxOutputTokens: 1200,
+          maxOutputTokens: 4000,
           stopWhen: stepCountIs(6),
         });
         respuesta = (r.text || "").trim();

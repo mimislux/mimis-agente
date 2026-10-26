@@ -109,20 +109,43 @@ function candidatos(wa) {
   return set;
 }
 
+// WhatsApp limita el texto a 4096 caracteres por mensaje. Si el agente responde más
+// largo, partimos en varios mensajes (cortando por salto de línea o espacio, no por palabra).
+function partirTexto(texto, limite = 4000) {
+  if (texto.length <= limite) return [texto];
+  const partes = [];
+  let restante = texto;
+  while (restante.length > limite) {
+    let corte = restante.lastIndexOf("\n", limite);
+    if (corte < limite * 0.5) corte = restante.lastIndexOf(" ", limite);
+    if (corte < limite * 0.5) corte = limite;
+    partes.push(restante.slice(0, corte));
+    restante = restante.slice(corte).replace(/^\s+/, "");
+  }
+  if (restante) partes.push(restante);
+  return partes;
+}
+
 async function enviarWhatsApp(env, para, texto, pnid) {
   let ultimoError = null;
+  const partes = partirTexto(texto);
   for (const destino of candidatos(para)) {
-    const r = await fetch(`${API}/${pnid || env.WHATSAPP_PNID}/messages`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messaging_product: "whatsapp", recipient_type: "individual",
-        to: destino, type: "text", text: { preview_url: true, body: texto },
-      }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) return { ok: true, id: d?.messages?.[0]?.id || null, destino, error: null };
-    ultimoError = d?.error || null;
+    const ids = [];
+    let fallo = false;
+    for (const cuerpo of partes) {
+      const r = await fetch(`${API}/${pnid || env.WHATSAPP_PNID}/messages`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messaging_product: "whatsapp", recipient_type: "individual",
+          to: destino, type: "text", text: { preview_url: true, body: cuerpo },
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { ids.push(d?.messages?.[0]?.id || null); }
+      else { fallo = true; ultimoError = d?.error || null; break; }
+    }
+    if (!fallo) return { ok: true, id: ids.join(","), destino, error: null, partes: ids.length };
   }
   return { ok: false, id: null, destino: null, error: ultimoError };
 }
