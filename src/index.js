@@ -119,8 +119,10 @@ function partirTexto(texto, limite = 4000) {
     let corte = restante.lastIndexOf("\n", limite);
     if (corte < limite * 0.5) corte = restante.lastIndexOf(" ", limite);
     if (corte < limite * 0.5) corte = limite;
-    partes.push(restante.slice(0, corte));
-    restante = restante.slice(corte).replace(/^\s+/, "");
+    // Incluir el espacio/salto en el bloque anterior para no pegar dos palabras.
+    const fin = corte < limite ? corte + 1 : corte;
+    partes.push(restante.slice(0, fin));
+    restante = restante.slice(fin);
   }
   if (restante) partes.push(restante);
   return partes;
